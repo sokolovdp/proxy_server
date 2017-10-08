@@ -1,0 +1,15 @@
+# ignore folders
+.idea/
+__pycache__/
+.vagrant/
+samples/
+
+#ignore files
+*.bak
+*.bat
+*.log
+*.pyc
+*.db
+*.jpg
+*.sqlite3
+*.html
