@@ -45,8 +45,54 @@ class ProxyRequestHandler(BaseHTTPRequestHandler):
             if pattern in full_url_to_check:
                 return False
         self.send_error(403)
-        # print("Method: {} blocked URL: {}".format(self.command, full_url_to_check))
         return True
+
+    @staticmethod
+    def filter_response_content(html_content: "str") -> "str":
+        print("------------------------FILTER:\n", html_content)
+        return html_content
+
+    @staticmethod
+    def filter_headers(headers: "dict") -> "dict":
+        for header in IGNORED_HOP_BY_HOP_HEADERS:
+            del headers[header]
+        if 'Accept-Encoding' in headers:  # accept only supported encodings
+            filtered_encodings = [encoding for encoding in re.split(r',\s*', headers['Accept-Encoding'])
+                                  if encoding in ALLOWED_ENCODINGS]
+            headers['Accept-Encoding'] = ', '.join(filtered_encodings)
+        return headers
+
+    @staticmethod
+    def encode_content_body(text_to_encode: "str", encoding: "str") -> "bytes":
+        if encoding == 'identity':
+            encoded_data = text_to_encode
+        elif encoding in ZIP_DECODERS:
+            bytes_stream = BytesIO()
+            with gzip.GzipFile(fileobj=bytes_stream, mode='wb') as io:
+                io.write(text_to_encode)
+            encoded_data = bytes_stream.getvalue()
+        elif encoding == 'deflate':
+            encoded_data = zlib.compress(text_to_encode)
+        else:
+            raise Exception("unsupported content-encoding: {}".format(encoding))
+        return encoded_data
+
+    @staticmethod
+    def decode_content_body(encoded_data: "bytes", encoding: "str") -> "str":
+        if encoding == 'identity':
+            decoded_text = encoded_data
+        elif encoding in ZIP_DECODERS:
+            bytes_stream = BytesIO(encoded_data)
+            with gzip.GzipFile(fileobj=bytes_stream) as io:
+                decoded_text = io.read()
+        elif encoding == 'deflate':
+            try:
+                decoded_text = zlib.decompress(encoded_data)
+            except zlib.error:
+                decoded_text = zlib.decompress(encoded_data, -zlib.MAX_WBITS)
+        else:
+            raise Exception("unsupported content-encoding: {}".format(encoding))
+        return decoded_text
 
     def do_CONNECT(self):
         incoming_request = self
@@ -67,8 +113,7 @@ class ProxyRequestHandler(BaseHTTPRequestHandler):
         paired_connections = [incoming_request.connection, outgoing_connection]
         connection_is_open = True
         while connection_is_open:
-            readable_sockets, writable_sockets, exceptions = select.select(paired_connections, [], paired_connections,
-                                                                           TIMEOUT)
+            readable_sockets, writable_sockets, exceptions = select.select(paired_connections, [], paired_connections, TIMEOUT)
             if exceptions or (not readable_sockets):
                 break
             for in_socket in readable_sockets:
@@ -94,11 +139,9 @@ class ProxyRequestHandler(BaseHTTPRequestHandler):
         try:
             if get_origin not in get_request.tread_value.connections:
                 if scheme == 'https':
-                    get_request.tread_value.connections[get_origin] = http.client.HTTPSConnection(netloc,
-                                                                                                  timeout=TIMEOUT)
+                    get_request.tread_value.connections[get_origin] = http.client.HTTPSConnection(netloc, timeout=TIMEOUT)
                 elif scheme == 'http':
-                    get_request.tread_value.connections[get_origin] = http.client.HTTPConnection(netloc,
-                                                                                                 timeout=TIMEOUT)
+                    get_request.tread_value.connections[get_origin] = http.client.HTTPConnection(netloc, timeout=TIMEOUT)
                 else:
                     print("GET - unsupported scheme:", scheme)
                     get_request.send_error(403)
@@ -117,7 +160,10 @@ class ProxyRequestHandler(BaseHTTPRequestHandler):
 
         content_encoding = response.headers.get('Content-Encoding', 'identity')
         decoded_response_body = get_request.decode_content_body(response_body, content_encoding)
-        response.headers['Content-Length'] = str(len(response_body))
+
+        filtered_response_body = get_request.filter_response_content(decoded_response_body)
+
+        response.headers['Content-Length'] = str(len(filtered_response_body))
         setattr(response, 'headers', get_request.filter_headers(response.headers))
         get_request.wfile.write(
             "{} {} {}\r\n".format(get_request.protocol_version, response.status, response.reason).encode())
@@ -125,50 +171,8 @@ class ProxyRequestHandler(BaseHTTPRequestHandler):
         for header in response.headers:
             get_request.wfile.write(header.encode())
         get_request.wfile.write(b'\r\n\r\n')
-        get_request.wfile.write(decoded_response_body)
+        get_request.wfile.write(filtered_response_body)
         get_request.wfile.flush()
-
-    @staticmethod
-    def filter_headers(headers):
-        for header in IGNORED_HOP_BY_HOP_HEADERS:
-            del headers[header]
-        if 'Accept-Encoding' in headers:  # accept only supported encodings
-            filtered_encodings = [encoding for encoding in re.split(r',\s*', headers['Accept-Encoding'])
-                                  if encoding in ALLOWED_ENCODINGS]
-            headers['Accept-Encoding'] = ', '.join(filtered_encodings)
-        return headers
-
-    @staticmethod
-    def encode_content_body(text_to_encode, encoding):
-        if encoding == 'identity':
-            encoded_data = text_to_encode
-        elif encoding in ZIP_DECODERS:
-            bytes_stream = BytesIO()
-            with gzip.GzipFile(fileobj=bytes_stream, mode='wb') as io:
-                io.write(text_to_encode)
-            encoded_data = bytes_stream.getvalue()
-        elif encoding == 'deflate':
-            encoded_data = zlib.compress(text_to_encode)
-        else:
-            raise Exception("unsupported content-encoding: {}".format(encoding))
-        return encoded_data
-
-    @staticmethod
-    def decode_content_body(encoded_data, encoding):
-        if encoding == 'identity':
-            decoded_text = encoded_data
-        elif encoding in ZIP_DECODERS:
-            bytes_stream = BytesIO(encoded_data)
-            with gzip.GzipFile(fileobj=bytes_stream) as io:
-                decoded_text = io.read()
-        elif encoding == 'deflate':
-            try:
-                decoded_text = zlib.decompress(encoded_data)
-            except zlib.error:
-                decoded_text = zlib.decompress(encoded_data, -zlib.MAX_WBITS)
-        else:
-            raise Exception("unsupported content-encoding: {}".format(encoding))
-        return decoded_text
 
 
 def proxy_server(handler_class=ProxyRequestHandler, server_class=ThreadingHTTPServer):
