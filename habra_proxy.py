@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-# import sys
 import re
 
 import socket
@@ -175,10 +174,10 @@ class ProxyRequestHandler(BaseHTTPRequestHandler):
 def proxy_server(handler_class=ProxyRequestHandler, server_class=ThreadingHTTPServer):
     server_address = (PROXY_IP, PROXY_PORT)
     handler_class.protocol_version = HTTP_ver
-    httpd = server_class(server_address, handler_class)
-    socket_address = httpd.socket.getsockname()
+    proxy_handler = server_class(server_address, handler_class)
+    socket_address = proxy_handler.socket.getsockname()
     print("Habra HTTP proxy server is running on {}:{}".format(socket_address[0], socket_address[1]))
-    httpd.serve_forever()
+    proxy_handler.serve_forever()
 
 
 if __name__ == '__main__':
